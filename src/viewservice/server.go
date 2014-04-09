@@ -15,7 +15,6 @@ type ViewServer struct {
   dead bool
   me string
 
-
   // Your declarations here.
   view *View
   ACKed bool
@@ -24,8 +23,23 @@ type ViewServer struct {
   firstPingDone bool
 }
 
+//
+// Duplicate the object, not the reference
+//
+func (vs *ViewServer) cloneView () View {
+  v := View{
+    Viewnum: vs.view.Viewnum,
+    Primary: vs.view.Primary,
+    Backup:  vs.view.Backup}
+  
+  return v
+}
+
+//
+// Returns true if server hasn't pinged for a duration of PingInterval*DeadPings
+//
 func (vs *ViewServer) isDead (server string) bool {
-  if server == "" { return false }  // Server still waiting for first Primary
+  if server == "" { return false } // (Probably) still waiting for first Primary
   
   t := *vs.lastPing[server]
   deadline := t.Add(PingInterval*DeadPings) // possible nil pointer...
@@ -36,43 +50,53 @@ func (vs *ViewServer) isDead (server string) bool {
 // server Ping RPC handler.
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
+  /*
+   * 1. INITIALISATION (OF FUNCTION VARIABLES)
+   */
   // take a "snapshot" of the view before proceeding
-  vs.lastView = &View{
-    Viewnum: vs.view.Viewnum,
-    Primary: vs.view.Primary,
-    Backup:  vs.view.Backup}
+  v := vs.cloneView()
+  vs.lastView = &v
   // update the ping time of the calling server
   t := time.Now()
   vs.lastPing[args.Me] = &t
   
-  // Is this the ViewServer's first ping?
-  if !vs.firstPingDone {
+  /*
+   * 2. INITIALISATION (OF VIEWSERVER)
+   */
+  if !vs.firstPingDone {    // Runs only once!
     vs.view.Primary = args.Me
-    vs.firstPingDone = true
+    vs.firstPingDone = true // should never become false again
     goto REPLY_AND_RETURN
   }
 
-  // Primary acknowledged the view sent in previous reply?
+  /*
+   * 3. DETECT AND ACT UPON PRIMARY'S ACKNOWLEDGEMENT
+   */
+  // Detect Primary's possible acknowledgement
   if args.Me == vs.view.Primary && args.Viewnum == vs.view.Viewnum {
     vs.ACKed = true
   }
   // Can we update the view (or just cancel that godawful show altogether)?
   if !vs.ACKed {
-    goto REPLY_AND_RETURN // can't update :(
+    goto REPLY_AND_RETURN // can't update
   }
 
-  /*** IT'S HAPPENING: Starting to update the view ***/
-  // Remove dead servers
-  if vs.isDead(vs.view.Primary) ||
-      args.Me == vs.view.Primary && args.Viewnum == 0 {
+  /*
+   * 4. IT'S HAPPENING: STARTING TO UPDATE THE VIEW
+   */
+  // Remove any dead servers
+  if vs.isDead(vs.view.Primary) ||                     // Primary didn't ping or
+      args.Me == vs.view.Primary && args.Viewnum == 0 {// recovered from crash
     vs.view.Primary = ""
   }
-  if vs.isDead(vs.view.Backup) ||
-      args.Me == vs.view.Backup && args.Viewnum == 0 {
+  if vs.isDead(vs.view.Backup) ||                      // Backup didn't ping or
+      args.Me == vs.view.Backup && args.Viewnum == 0 { // recovered from crash
     vs.view.Backup = ""
   }
   if vs.view.Backup == "" && vs.view.Primary == "" {
-    goto REPLY_AND_RETURN // (Sort of) fatal: unable to update view again
+    // All my servers are dead. "...The view service cannot change views, spins
+    // forever, and cannot make forward progress."
+    goto REPLY_AND_RETURN
   }
   // Promote whichever servers we can
   if vs.view.Primary == "" && vs.view.Backup != "" {
@@ -80,11 +104,15 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
     vs.view.Backup = ""
   }
   if vs.view.Backup == "" &&
-      args.Me != vs.view.Primary && args.Me != vs.view.Backup {
+      args.Me != vs.view.Primary && args.Me != vs.view.Backup {// pinger not al-
+                                                               // ready a Prim-
+                                                               // ary or Backup
     vs.view.Backup = args.Me
   }
-  /*** IT'S OGRE NOW: done updating view ***/
-
+  
+  /*
+   * 5. IT'S OGRE NOW: TIE UP LOOSE ENDS AND RETURN
+   */
   REPLY_AND_RETURN:
   // Has the view changed?
   if vs.lastView.Primary != vs.view.Primary ||
@@ -93,10 +121,8 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
     vs.ACKed = false
   }
   // clone vs.view so that Ping()'s callers can't change it
-  reply.View = View{
-    Viewnum: vs.view.Viewnum,
-    Primary: vs.view.Primary,
-    Backup:  vs.view.Backup}
+  reply.View = vs.cloneView()
+
   return nil
 }
 
@@ -105,10 +131,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 //
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
   // clone vs.view so that Get()'s callers can't change it
-  reply.View = View{
-    Viewnum: vs.view.Viewnum,
-    Primary: vs.view.Primary,
-    Backup:  vs.view.Backup}
+  reply.View = vs.cloneView()
 
   return nil
 }
