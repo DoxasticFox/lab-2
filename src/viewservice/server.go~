@@ -53,9 +53,6 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
   /*
    * 1. INITIALISATION (OF FUNCTION VARIABLES)
    */
-  // take a "snapshot" of the view before proceeding
-  v := vs.cloneView()
-  vs.lastView = &v
   // update the ping time of the calling server
   t := time.Now()
   vs.lastPing[args.Me] = &t
@@ -81,45 +78,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
     goto REPLY_AND_RETURN // can't update
   }
 
-  /*
-   * 4. IT'S HAPPENING: STARTING TO UPDATE THE VIEW
-   */
-  // Remove dead servers
-  if vs.isDead(vs.view.Primary) ||                     // Primary didn't ping or
-      args.Me == vs.view.Primary && args.Viewnum == 0 {// recovered from crash
-    vs.view.Primary = ""
-  }
-  if vs.isDead(vs.view.Backup) ||                      // Backup didn't ping or
-      args.Me == vs.view.Backup && args.Viewnum == 0 { // recovered from crash
-    vs.view.Backup = ""
-  }
-  if vs.view.Backup == "" && vs.view.Primary == "" {
-    // All my servers are dead. "...The view service cannot change views, spins
-    // forever, and cannot make forward progress."
-    goto REPLY_AND_RETURN
-  }
-  // Promote whichever servers we can
-  if vs.view.Primary == "" && vs.view.Backup != "" {
-    vs.view.Primary = vs.view.Backup
-    vs.view.Backup = ""
-  }
-  if vs.view.Backup == "" &&
-      args.Me != vs.view.Primary && args.Me != vs.view.Backup {// pinger not al-
-                                                               // ready a Prim-
-                                                               // ary or Backup
-    vs.view.Backup = args.Me
-  }
-  
-  /*
-   * 5. IT'S OGRE NOW: TIE UP LOOSE ENDS AND RETURN
-   */
   REPLY_AND_RETURN:
-  // Has the view changed?
-  if vs.lastView.Primary != vs.view.Primary ||
-      vs.lastView.Backup != vs.view.Backup {
-    vs.view.Viewnum++
-    vs.ACKed = false
-  }
   // clone vs.view so that Ping()'s callers can't change it
   reply.View = vs.cloneView()
 
@@ -143,7 +102,41 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 // accordingly.
 //
 func (vs *ViewServer) tick() {
-  // Ping() took on tick()'s role
+  // take a "snapshot" of the view before proceeding
+  v := vs.cloneView()
+  vs.lastView = &v
+
+  /*
+   * 4. IT'S HAPPENING: STARTING TO UPDATE THE VIEW
+   */
+  // Remove any dead servers
+  if vs.isDead(vs.view.Primary) {// recovered from crash
+    vs.view.Primary = ""
+  }
+  if vs.isDead(vs.view.Backup)  { // recovered from crash
+    vs.view.Backup = ""
+  }
+  if vs.view.Backup == "" && vs.view.Primary == "" {
+    // All my servers are dead. "...The view service cannot change views, spins
+    // forever, and cannot make forward progress."
+    goto REPLY_AND_RETURN
+  }
+  // Promote whichever servers we can
+  if vs.view.Primary == "" && vs.view.Backup != "" {
+    vs.view.Primary = vs.view.Backup
+    vs.view.Backup = ""
+  }
+  
+  /*
+   * 5. IT'S OGRE NOW: TIE UP LOOSE ENDS AND RETURN
+   */
+  REPLY_AND_RETURN:
+  // Has the view changed?
+  if vs.lastView.Primary != vs.view.Primary ||
+      vs.lastView.Backup != vs.view.Backup {
+    vs.view.Viewnum++
+    vs.ACKed = false
+  }
 }
 
 //

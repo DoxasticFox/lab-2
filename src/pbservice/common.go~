@@ -19,6 +19,7 @@ type PutArgs struct {
   DoHash bool // For PutHash
   // You'll have to add definitions here.
   Commit bool
+  Forwarded bool
 
   // Field names must start with capital letters,
   // otherwise RPC will break.

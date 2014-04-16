@@ -96,8 +96,10 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
   ok := false
-  commit := false
-  args := &PutArgs{key, value, dohash, commit}
+  args := &PutArgs{
+      Key: key,
+      Value: value,
+      DoHash: dohash}
   var reply PutReply
 
   /* Do put */

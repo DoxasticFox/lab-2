@@ -44,14 +44,15 @@ func (pb *PBServer) putForward(args *PutArgs, reply *PutReply) error {
     return nil
   }
 
-  ok := false
-  for ; !ok ; {
+  args.Commit = false
+  args.Forwarded = true
+  for ok := false; !ok ; {
     ok = call(getBackup(pb.vshost), "PBServer.Put", args, &reply)
     if ok { break }
     time.Sleep(viewservice.PingInterval)
   }
   args.Commit = true
-  for ; !ok ; {
+  for ok := false; !ok ; {
     ok = call(getBackup(pb.vshost), "PBServer.Put", args, &reply)
     if ok { break }
     time.Sleep(viewservice.PingInterval)
@@ -85,10 +86,9 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
   /* Forward to backup */
   if pb.me == pb.latestView.Primary {
     argsClone := &PutArgs{
-        args.Key,
-        args.Value,
-        args.DoHash,
-        args.Commit}
+        Key:    args.Key,
+        Value:  args.Value,
+        DoHash: false}
     var ignoredReply PutReply
     pb.putForward(argsClone, &ignoredReply)
   }
@@ -142,9 +142,7 @@ func (pb *PBServer) tick() {
   for k, v := range pb.kvs {
     args := &PutArgs{
         Key:    k,
-        Value:  v,
-        DoHash: false,
-        Commit: true}
+        Value:  v}
     var reply PutReply
     pb.putForward(args, &reply)
   }
