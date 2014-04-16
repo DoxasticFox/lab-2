@@ -17,8 +17,7 @@ type PutArgs struct {
   Key string
   Value string
   DoHash bool // For PutHash
-  // You'll have to add definitions here.
-  Commit bool
+  Commit bool // Whether to commit changes to the database
 
   // Field names must start with capital letters,
   // otherwise RPC will break.
@@ -48,6 +47,10 @@ func hash(s string) uint32 {
   return h.Sum32()
 }
 
+//
+// Contact the viewserver to find out the address of either the Primary or
+// Backup.
+//
 func getServer (vs string, pb ServerRole) (string, bool) {
   args := &viewservice.GetArgs{}
   var reply viewservice.GetReply

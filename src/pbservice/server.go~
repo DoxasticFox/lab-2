@@ -33,39 +33,32 @@ type PBServer struct {
   finish chan interface{}
   // Your declarations here.
   vshost string
-  putCalls map[PutArgs]bool // keys and values stright from PutArgs
+  putCalls map[PutArgs]bool // makeshift `set' of PutArgs
   kvs map[string]string // keys and (possibly hashed) values
   mutex *sync.Mutex
   latestView *viewservice.View
 }
 
 func (pb *PBServer) putForward(args *PutArgs, reply *PutReply) error {
-  if pb.latestView.Backup == "" {
+  if getBackup(pb.vshost) == "" {     // puts should only be received by backups
     return nil
   }
 
-  args.Commit = false
-  args.Forwarded = true
-  for ok := false; !ok ; {
+  args.Commit = true  // immediately commit changes to database. (Assumes backup
+                      // will never receive duplicate calls from this function.)
+  for ok := false; ; {
     ok = call(getBackup(pb.vshost), "PBServer.Put", args, &reply)
-    if ok { break }
-    time.Sleep(viewservice.PingInterval)
-  }
-  args.Commit = true
-  for ok := false; !ok ; {
-    ok = call(getBackup(pb.vshost), "PBServer.Put", args, &reply)
-    if ok { break }
+    if ok && reply.Err == "" { break }
     time.Sleep(viewservice.PingInterval)
   }
 
-  return nil  // No error reporting (yet)
+  return nil
 }
 
 func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
-  pb.mutex.Lock()
+  pb.mutex.Lock() // for putCalls and kvs
   defer pb.mutex.Unlock()
   
-
   /* Some initilization */
   var ok bool
   var previous string
@@ -74,26 +67,28 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
     previous = ""
   }
 
-  /* At-most-once semantics */
+  /* Don't put (return early) if we already received these args. Ensures
+   * at-most-once semantics */
   _, ok = pb.putCalls[*args]
   if ok {
     reply.PreviousValue = previous
     return nil
   }
-  pb.putCalls[*args] = true
+  pb.putCalls[*args] = true//remember these arguments so we don't put them again
 
 
   /* Forward to backup */
   if pb.me == pb.latestView.Primary {
-    argsClone := &PutArgs{
+    argsClone := &PutArgs{     // putForward will modify args if it's not cloned
         Key:    args.Key,
         Value:  args.Value,
-        DoHash: false}
+        DoHash: args.DoHash,
+        Commit: args.Commit /*Actually, this is overridden by putForward*/}
     var ignoredReply PutReply
     pb.putForward(argsClone, &ignoredReply)
   }
 
-  /* Put */
+  /* Put (and hash if requested)*/
   if args.Commit {
     if args.DoHash {
       h := hash(previous + args.Value)
@@ -102,6 +97,7 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
     pb.kvs[args.Key] = args.Value
   }
 
+  /* Finish up */
   reply.Err = ""
   reply.PreviousValue = previous
   return nil
@@ -110,11 +106,11 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
   v, ok := pb.kvs[args.Key]
 
-  if pb.me != getPrimary(pb.vshost) {
+  if pb.me != getPrimary(pb.vshost) {       // only the primary can serve get()s
     reply.Err = ErrWrongServer
-  } else if !ok {
+  } else if !ok {              // Can't find the value corresponding to args.Key
     reply.Err = ErrNoKey
-  } else {
+  } else {                                                       // No problemo!
     reply.Value = v
     reply.Err = ""
   }
@@ -125,8 +121,8 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 
 // ping the viewserver periodically.
 func (pb *PBServer) tick() {
-  oldBackup := pb.latestView.Backup
-  /* Ping and get latest view */
+  oldBackup := pb.latestView.Backup // store to compare to more recent view
+  /* Ping to get latest view */
   args := &viewservice.PingArgs{pb.me, pb.latestView.Viewnum}
   var reply viewservice.PingReply
   ok := call(pb.vshost, "ViewServer.Ping", args, &reply)
@@ -135,16 +131,18 @@ func (pb *PBServer) tick() {
   }
   pb.latestView = &reply.View
 
-  /* If the backup changed send a copy of the database */
+  /* If the backup changed, send a copy of the database */
   if oldBackup == pb.latestView.Backup {
     return // Nothing to do
   }
   for k, v := range pb.kvs {
-    args := &PutArgs{
+    args1 := &PutArgs{
         Key:    k,
-        Value:  v}
+        Value:  v,
+        DoHash: false,
+        Commit: args.Commit /*Actually, this is overridden by putForward*/}
     var reply PutReply
-    pb.putForward(args, &reply)
+    pb.putForward(args1, &reply)
   }
 }
 
@@ -167,9 +165,9 @@ func StartServer(vshost string, me string) *PBServer {
   pb.putCalls = make(map[PutArgs]bool)
   pb.kvs = make(map[string]string)
   pb.latestView = &viewservice.View{
-    Viewnum: 0,
-    Primary: "",
-    Backup:  ""}
+      Viewnum: 0,
+      Primary: "",
+      Backup:  ""}
   pb.mutex = &sync.Mutex{}
 
   rpcs := rpc.NewServer()

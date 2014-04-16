@@ -66,11 +66,11 @@ func call(srv string, rpcname string,
 }
 
 func (ck *Clerk) GetExt (key string) string {
-  ok := false
   args := &GetArgs{key}
   var reply GetReply
 
-  for ; ; {
+  /* Keep attempting to get the value */
+  for ok := false; ; {
     ok = call(getPrimary(ck.vshost), "PBServer.Get", args, &reply)
     if ok && reply.Err == "" { break }
     time.Sleep(viewservice.PingInterval)
@@ -95,23 +95,21 @@ func (ck *Clerk) Get(key string) string {
 // must keep trying until it succeeds.
 //
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
-  ok := false
-  args := &PutArgs{
-      Key: key,
-      Value: value,
-      DoHash: dohash}
+  commit := false
+  args := &PutArgs{key, value, dohash, commit}
   var reply PutReply
 
   /* Do put */
-  for ; ; {
+  for ok := false; ; {
     ok = call(getPrimary(ck.vshost), "PBServer.Put", args, &reply)
     if ok && reply.Err == "" { break }
     time.Sleep(viewservice.PingInterval)
   }
   previous := reply.PreviousValue
-  /* Tell server we recieved the reply (the put it commited once this runs) */
+  /* Tell server we recieved the reply (the put is commited once this runs).
+   * This is required for for at-most-once semantics. */
   args.Commit = true
-  for ; ; {
+  for ok := false; ; {
     ok = call(getPrimary(ck.vshost), "PBServer.Put", args, &reply)
     if ok && reply.Err == "" { break }
     time.Sleep(viewservice.PingInterval)
